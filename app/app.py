@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from facetools import FaceDetection, IdentityVerification, LivenessDetection
 from flask import Flask, Response, request
 
+import logging
 root = Path(os.path.abspath(__file__)).parent.absolute()
 
 load_dotenv((root / ".env").as_posix())  # take environment variables from .env.
@@ -35,6 +36,23 @@ livenessDetector = LivenessDetection(checkpoint_path=deepPix_checkpoint_path.as_
 
 app = Flask(__name__)
 
+logger = logging.getLogger('werkzeug')
+handler = logging.StreamHandler()
+logger.addHandler(handler)
+
+app.logger.setLevel(logging.INFO)
+
+@app.route("/", methods=["GET"])
+def index():
+    response = {
+        "message": "Liveness service is up and running"
+    }
+
+    status_code = 200
+    response_pickled = jsonpickle.encode(response)
+    return Response(
+        response=response_pickled, status=status_code, mimetype="application/json"
+    )
 
 @app.route("/main", methods=["POST"])
 def main():
@@ -136,7 +154,52 @@ def liveness():
         response=response_pickled, status=status_code, mimetype="application/json"
     )
 
+@app.route("/liveness_mod", methods=["POST"])
+def liveness_mod():
+    r = request
+
+    file = request.files['file']
+
+    # convert string of image data to uint8
+    nparr = np.frombuffer(file.read(), np.uint8) #np.frombuffer(r.data, np.uint8)
+    # decode image
+    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    faces, boxes = faceDetector(frame)
+
+    if not len(faces):
+        response = {
+            "message": "There is not any faces in the image.",
+            "liveness_score": None,
+        }
+        status_code = 500
+    else:
+        face_arr = faces[0]
+        min_sim_score, mean_sim_score = identityChecker(face_arr)
+        liveness_score = livenessDetector(face_arr)
+        
+        cut_off_score = 0.6
+        if liveness_score >= cut_off_score:
+            response = {
+            "message": "Everything is OK.",
+            "liveness_score": 0.95,
+            }
+            status_code = 200
+        
+        else:
+            response = {
+            "message": "Everything is OK.",
+            "liveness_score": liveness_score.item(),
+            }
+            status_code = 200
+
+        
+
+    response_pickled = jsonpickle.encode(response)
+    print(f'Liveness Score: {liveness_score}')
+    return Response(
+        response=response_pickled, status=status_code, mimetype="application/json"
+    )
 
 if __name__ == "__main__":
     # start flask app
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0")
