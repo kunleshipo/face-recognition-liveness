@@ -1,20 +1,22 @@
 version: '3.4'
 services:
   liveness-api:
+    image: kunleadeyemi/liveness-api:latest
+    container_name: liveness-api
     build: .
-    ports:
-      - "80:80"
+    #ports:
+    #  - "80:80"
+    network_mode: host
     restart: unless-stopped
     volumes:
       - ./app:/var/www/face-recognition-liveness/app
-    
     labels:
       - "autoheal=true"
 
     healthcheck:
       test: curl --fail http://localhost || exit 1
       interval: 60s
-      retries: 1
+      retries: 3
       start_period: 20s
       timeout: 10s
   
@@ -26,3 +28,7 @@ services:
     environment:
       - AUTOHEAL_INTERVAL=10
       - CURL_TIMEOUT=30
+
+networks:
+  webnet:
+    driver: bridge

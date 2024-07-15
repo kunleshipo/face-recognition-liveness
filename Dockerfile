@@ -1,44 +1,46 @@
-FROM python:3.7-slim-buster
+# Use an official Python runtime as a parent image
+FROM python:3.8-slim-buster
 
-RUN apt-get update && apt-get install -y apache2 \
-    libapache2-mod-wsgi-py3 \
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
+
+# Install uWSGI and other dependencies
+RUN apt-get update && apt-get install -y \
+    nginx \
+    curl \
     build-essential \
-    ffmpeg \ 
-    libsm6 \ 
-    libxext6 \
-    curl\
- && apt-get clean \
- && apt-get autoremove \
- && rm -rf /var/lib/apt/lists/*
+    python3-dev \
+    libpcre3 \
+    libpcre3-dev \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    && apt-get clean \
+    && apt-get autoremove \
+    && rm -rf /var/lib/apt/lists/*
 
+# Copy requirements.txt to the Docker image and install Python dependencies
+COPY ./requirements.txt /app/requirements.txt
+WORKDIR /app
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install gunicorn
 
-# Copy over and install the requirements
-COPY . /var/www/face-recognition-liveness
+# Remove default Nginx configuration file
+RUN rm /etc/nginx/sites-enabled/default
 
-WORKDIR /var/www/face-recognition-liveness
+# Copy Nginx configuration file
+COPY ./nginx.conf /etc/nginx/nginx.conf
 
-RUN pip3 install -r requirements.txt
+# Copy application code to /app
+COPY . /app
 
-# Copy over the apache configuration file and enable the site
-COPY ./face-recognition-liveness.conf /etc/apache2/sites-available/face-recognition-liveness.conf
-RUN a2ensite face-recognition-liveness
-RUN a2enmod headers
+# Create directories and set permissions
+RUN mkdir -p /var/log/uwsgi
+RUN chown -R www-data:www-data /var/log/uwsgi
+RUN chmod -R 755 /app
 
-#RUN service apache2 reload
-
-#COPY ./run.py /var/www/apache-flask/run.py
-#COPY ./app /var/www/apache-flask/app/
-
-RUN a2dissite 000-default.conf
-RUN a2ensite face-recognition-liveness.conf
-
-# LINK apache config to docker logs.
-RUN ln -sf /proc/self/fd/1 /var/log/apache2/access.log && \
-    ln -sf /proc/self/fd/1 /var/log/apache2/error.log
-
+# Expose ports
 EXPOSE 80
 
-#WORKDIR /var/www/apache-flask
-
-
-CMD  /usr/sbin/apache2ctl -D FOREGROUND
+# Start Gunicorn and Nginx
+CMD service nginx start && gunicorn -w 2 -b unix:/app/app/app.sock app.app:app

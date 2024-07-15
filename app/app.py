@@ -1,6 +1,8 @@
 import os
 from os import environ
 from pathlib import Path
+import sys
+import subprocess
 
 import cv2
 import jsonpickle
@@ -8,8 +10,19 @@ import numpy as np
 from dotenv import load_dotenv
 from facetools import FaceDetection, IdentityVerification, LivenessDetection
 from flask import Flask, Response, request
+from PIL import Image
+import logging
+import io
+from werkzeug.utils import secure_filename
+from PyPDF2 import PdfFileReader
+import fitz
+import tempfile
 
 import logging
+import time
+
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
 root = Path(os.path.abspath(__file__)).parent.absolute()
 
 load_dotenv((root / ".env").as_posix())  # take environment variables from .env.
@@ -18,7 +31,6 @@ data_folder = environ.get("DATA_FOLDER")
 resnet_name = environ.get("RESNET")
 deeppix_name = environ.get("DEEPPIX")
 facebank_name = environ.get("FACEBANK")
-
 
 data_folder = root.parent / data_folder
 
@@ -40,7 +52,7 @@ logger = logging.getLogger('werkzeug')
 handler = logging.StreamHandler()
 logger.addHandler(handler)
 
-app.logger.setLevel(logging.INFO)
+app.logger.setLevel(logging.DEBUG)
 
 @app.route("/", methods=["GET"])
 def index():
@@ -48,7 +60,55 @@ def index():
         "message": "Liveness service is up and running"
     }
 
-    status_code = 200
+    logging.debug(f"Data folder: {data_folder}")
+    logging.debug(f"ResNet: {resnet_name}")
+    logging.debug(f"DeepPix: {deeppix_name}")
+    logging.debug(f"Facebank: {facebank_name}")
+
+    #SITE_ROOT = os.path.realpath(os.path.dirname(__file__))
+
+    SITE_ROOT = os.path.abspath(os.getcwd()) #os.path.realpath(os.path.join(os.getcwd(), os.path.pardir))
+
+    image_url = os.path.join(SITE_ROOT, "data","images", "reynolds_003.png")
+
+    image = Image.open(image_url)
+
+    logger.debug("Image Loaded")
+
+    image_data = np.asarray(image)
+    # convert string of image data to uint8
+    nparr = np.frombuffer(image.tobytes(), np.uint8)
+
+    logger.debug("Image Decoded")
+
+    # decode image
+    frame = cv2.imread(image_url)
+
+    logger.debug("Image Frame Read")
+    
+    faces, boxes = faceDetector(frame)
+
+    logger.debug("Checked Faces")
+
+    if not len(faces):
+        response = {
+            "message": "There is not any faces in the image.",
+            "liveness_score": None,
+        }
+        status_code = 500
+    else:
+        face_arr = faces[0]
+        # add dummy file_name to the face_arr
+        #face_arr = ['GCDE'] + face_arr
+        min_sim_score, mean_sim_score, sim_index = identityChecker(face_arr)
+        liveness_score = livenessDetector(face_arr)
+
+        response = {
+            "message": "Everything is OK.",
+            "liveness_score": liveness_score.item(),
+        }
+        status_code = 200
+    
     response_pickled = jsonpickle.encode(response)
     return Response(
         response=response_pickled, status=status_code, mimetype="application/json"
@@ -199,6 +259,90 @@ def liveness_mod():
     return Response(
         response=response_pickled, status=status_code, mimetype="application/json"
     )
+
+@app.route("/verify_existing_graduated", methods=["POST"])
+def verify_existing_graduated():
+    r = request
+    
+    file = request.files['file']
+
+    filename = secure_filename(file.filename)
+
+    acceptable_file_types = ['pdf', 'jpg', 'jpeg']
+
+    file_extension = filename.split('.')[-1]
+
+    if file_extension not in acceptable_file_types:
+        response = {
+            "message": "File type is not acceptable."
+        }
+        status_code = 500
+        response_pickled = jsonpickle.encode(response)
+        return Response(
+            response=response_pickled, status=status_code, mimetype="application/json"
+        )
+    
+    image_files = []
+
+    # if file is pdf, extract face images from the pdf
+    if file_extension == 'pdf':
+        with tempfile.TemporaryDirectory() as path:
+            pdf_path = os.path.join(path, filename)
+            file.save(pdf_path)
+
+            pdf = PdfFileReader(pdf_path)
+            pdf_images = []
+
+            for page_num in range(pdf.getNumPages()):
+                page = pdf.getPage(page_num)
+                page_images = page.extract_images()
+                for img in page_images:
+                    pdf_images.append(img)
+
+            for img in pdf_images:
+                img_data = img['image']
+                img_ext = img_data.info.get('Filter')
+                img_ext = img_ext.split('/')[1]
+                img_data = img_data.get_data()
+                img_data = Image.open(io.BytesIO(img_data))
+                img_data.save(os.path.join(path, f'{page_num}_{img_ext}'))
+
+            image_files = [os.path.join(path, file) for file in os.listdir(path) if file.endswith('jpg') or file.endswith('jpeg')]
+
+    else:
+        image_files.append(file)
+
+    matched_faces = []
+
+    for image_file in image_files:
+        image = Image.open(image_file)
+        image_data = np.asarray(image)
+        # convert string of image data to uint8
+        nparr = np.frombuffer(image.tobytes(), np.uint8)
+        # decode image
+        frame = cv2.imread(image_file)
+        faces, boxes = faceDetector(frame)
+
+        if len(faces):
+            face_arr = faces[0] # Might have to append dummy file_name to the face_arr
+            face_arr = face_arr.prepend('GCDE')
+            min_sim_score, mean_sim_score, matched_filename = identityChecker(face_arr)
+            #image_files_uint8.append(image_file)
+            if min_sim_score < 1.0:  # Set a threshold for matching
+                matched_faces.append({
+                    "matched_filename": filename,
+                    "similarity_score": min_sim_score
+                })
+
+    response = {
+        "matched_faces": matched_faces
+    }
+    status_code = 200
+    response_pickled = jsonpickle.encode(response)
+    return Response(
+        response=response_pickled, status=status_code, mimetype="application/json"
+    )
+
 
 if __name__ == "__main__":
     # start flask app

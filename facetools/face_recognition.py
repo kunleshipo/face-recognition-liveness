@@ -27,7 +27,7 @@ class IdentityVerification:
         )
         self.facebank = pd.read_csv(facebank_path, header=None)
 
-    def __call__(self, face_arr: np.ndarray) -> Tuple[float, float]:
+    def __call__(self, face_arr: np.ndarray) -> Tuple[float, float, int]:
         face_arr = np.moveaxis(face_arr, -1, 0)
         input_arr = np.expand_dims((face_arr - 127.5) / 128.0, 0)
         embeddings = self.resnet.run(
@@ -37,7 +37,8 @@ class IdentityVerification:
         norm = np.linalg.norm(diff, axis=1)
         min_sim_score = np.around(norm.min(), 3)
         mean_sim_score = np.around(norm.mean(), 3)
-        return min_sim_score, mean_sim_score
+        min_sim_index = np.argmin(norm)
+        return min_sim_score, mean_sim_score, min_sim_index
 
 
 def show_progress(block_num, block_size, total_size):

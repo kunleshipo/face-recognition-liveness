@@ -62,6 +62,7 @@ resnet = onnxruntime.InferenceSession(
 
 f = open(csv_path, "w")
 writer = csv.writer(f)
+filenames_arr = []
 for image_path in tqdm(images_list):
     image = cv2.imread(image_path)
     faces, boxes = faceDetector(image)
@@ -72,5 +73,13 @@ for image_path in tqdm(images_list):
     face_arr = np.moveaxis(face_arr, -1, 0)
     input_arr = np.expand_dims((face_arr - 127.5) / 128.0, 0)
     embeddings = resnet.run(["output"], {"input": input_arr.astype(np.float32)})[0]
+    file_name = image_path.split('\\')[-1]
+    filenames_arr.append(file_name)
     writer.writerow(embeddings.flatten().tolist())
+f.close()
+
+# write the filenames to a separate file
+f = open(csv_path.replace(".csv", "_filenames.csv"), "w")
+writer = csv.writer(f)
+writer.writerow(filenames_arr)
 f.close()
